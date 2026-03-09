@@ -40,3 +40,9 @@ set(GEMM_SOURCES
 add_executable(gemm_bench ${GEMM_SOURCES})
 target_compile_options(gemm_bench PRIVATE -O3 -mavx2 -mfma -Wall -Wextra)
 target_link_libraries(gemm_bench PRIVATE Threads::Threads)
+
+# --- Clean Functionality ---
+set_directory_properties(PROPERTIES ADDITIONAL_CLEAN_FILES 
+    "${CMAKE_BINARY_DIR}/gemv_app"
+    "${CMAKE_BINARY_DIR}/gemm_bench"
+)

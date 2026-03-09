@@ -11,5 +11,5 @@ public:
 
     void execute(int start_row, int end_row, 
                  int start_col, int end_col, 
-                 const Matrix& A, const Matrix& B, Matrix& C) override;
+                 const Matrix& A, const Matrix& B, Matrix& C) override final;
 };

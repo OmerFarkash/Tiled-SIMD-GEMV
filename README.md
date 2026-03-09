@@ -1,20 +1,9 @@
-# Tiled-SIMD-Matrix-Engine 🚀
+# Tiled SIMD Matrix Engine
 
-A high-performance linear algebra acceleration library in C++20. This project demonstrates the evolution of optimizing matrix operations, moving from **Matrix-Vector (GEMV)** to **Matrix-Matrix (GEMM)** multiplication by bypassing the "memory wall" using SIMD, tiling, and software-managed memory.
+A high-performance C++ Matrix Multiplication (GEMM) and Vector (GEMV) engine optimized for modern CPU architectures. This project demonstrates significant speedups through **AVX2 SIMD Intrinsics**, **Cache-aware Tiling**, and **Multi-threaded 2D Grid Partitioning**.
 
----
 
-## 🏗 System Architecture
-
-The project implements **Software-Managed Memory** concepts:
-1. **DDR (Main Memory):** Large, high-latency storage.
-2. **SRAM (Local Buffers):** Fast, tiled buffers simulating on-chip memory.
-3. **Compute Kernels:** Hand-optimized AVX2/FMA routines.
-4. **Execution Engine:** A lock-free `ParallelExecutor` for multi-threaded scaling.
-
----
-
-## 🔹 Phase 1: Matrix-Vector Multiplication (GEMV)
+## 🔹 Matrix-Vector Multiplication (GEMV)
 
 Focuses on real-time streaming of weights using asynchronous double-buffering.
 
@@ -34,43 +23,54 @@ Focuses on real-time streaming of weights using asynchronous double-buffering.
 
 ---
 
-## 🔸 Phase 2 & 3: Matrix-Matrix Multiplication (GEMM)
+## 🔸 Matrix-Matrix Multiplication (GEMM)
 
 The current evolution stage. Unlike GEMV, GEMM is heavily compute-bound and requires aggressive cache reuse and vectorization.
 
-### 🧠 The Paradigm Shift: Dot Product vs. Outer Product
-This engine implements a fundamental algorithmic shift to maximize hardware utilization:
+### GEMM Performance:
+*Benchmark conducted on a Deep Learning FC Layer Profile (M=250, K=1000, N=4000).*
 
-* **Phase 2 (Dot Product Approach):** To compute a single element in the result matrix, a row of A is multiplied by a column of B. To avoid massive cache misses caused by column-wise memory access, the B matrix tile is dynamically **transposed (packed)** into the local SRAM buffer.
-* **Phase 3 (Outer Product & Broadcasting):** Utilizing AVX2 `_mm256_broadcast_ps`, the engine shifts to an outer-product formulation. A single scalar from A is broadcasted into a 256-bit register and multiplied against 8 contiguous elements of B using FMA. 
-  * **The Win:** Transposing the B tile is no longer required. The kernel processes 8 columns of the result matrix simultaneously, dramatically increasing Arithmetic Intensity and achieving a massive speedup.
+| Optimization Level | Strategy | Threads | Time (ms) | Speedup |
+| :--- | :--- | :--- | :--- | :--- |
+| **Baseline** | Naive Triple Loop | 1 | 1869.95 | 1.00x |
+| **Memory Opt** | Tiled + Packed Transpose | 1 | 736.74 | 2.54x |
+| **Vectorized** | SIMD + Broadcasting | 1 | 234.80 | 7.96x |
+| **Parallel** | **2D Grid SIMD Engine** | **8** | **100.83** | **18.54x** |
 
-### 📊 GEMM Performance (Deep Learning Profile)
-Benchmarking an asymmetric, unaligned Fully Connected (FC) layer profile common in Deep Learning workloads.
+*more benchmarks at execution*
+*Note: Performance gains between 4 and 8 threads may vary based on physical core count vs. Hyper-threading availability on the host CPU.*
 
-**Dimensions:** $M=250$ (Batch), $K=1000$ (In Features), $N=4000$ (Out Features)
-**Execution:** Single Thread (Baseline for parallel scaling) | **Optimal Cache Sweet-Spot:** 32x32 Tiles
+---
 
-| Algorithm | Execution Time | Speedup vs Naive | Notes |
-| :--- | :--- | :--- | :--- |
-| **Naive GEMM** | 2101.90 ms | 1.00x | Heavy Cache Misses |
-| **Naive Transpose** | 1229.57 ms | 1.71x | Global DDR Transpose |
-| **Tiled Packed Transpose (64)** | 842.83 ms | 2.49x | Phase 2: Cache Locality (Dot Product) |
-| **Tiled SIMD + Broadcast (32)** | **300.18 ms** | **7.00x** | Phase 3: Hardware Utilization (Outer Product) |
+## 🧠 Key Technical Implementations
 
-*Validation: All optimized kernels are mathematically verified against the naive baseline with strict tolerance bounds.*
+### 1. Vectorized Outer-Product (Broadcasting)
+To leverage AVX2 registers, the engine transitions from a standard Dot Product to an **Outer-Product pattern**. 
+* **The Operation:** A single scalar from Matrix $A$ is broadcasted across a 256-bit register.
+* **SIMD Execution:** It is multiplied by 8 contiguous elements of Matrix $B$ using FMA (`_mm256_fmadd_ps`).
+* **Efficiency:** This approach eliminates the need for transposing Matrix $B$ during the packing stage, significantly reducing memory overhead and maximizing ALU throughput.
+
+### 2. 2D Grid Parallel Partitioning
+The `ParallelExecutor` core utilizes a 2D Grid topology to distribute work across multiple cores.
+* **Cache Reuse:** By splitting the output matrix $C$ into blocks (Macro-tiles) rather than simple row-strips, we maximize the reuse of shared **L3 Cache** for matrices $A$ and $B$ across different threads.
+* **Load Balancing:** The engine dynamically calculates the most "square-like" grid for any given thread count, ensuring optimal work distribution and handling edge-case tails for unaligned dimensions.
+
+### 3. Cache-Aware Tiling
+Micro-tiling (fixed at $32 \times 32$) ensures that the active data set for any given computation fits entirely within the **L1 Data Cache**, preventing costly stalls and cache evictions during the inner-most computation loops.
+
+---
 
 ### 🧠 Technical Deep Dive: Dot Product vs. Outer Product (Broadcasting)
 
 This project showcases the transition between two fundamental execution patterns in GEMM optimization:
 
-#### 1. The Dot Product Approach (Phase 2)
+#### 1. The Dot Product Approach
 In the scalar tiled version, we calculate each element $C[i][j]$ individually:
 * **The Operation:** $C[i][j] = \sum (A[i][k] \times B[k][j])$.
 * **The Memory Challenge:** Since $B$ is stored in Row-Major order, accessing $B[k][j]$ for a fixed $j$ while incrementing $k$ results in **vertical strides** through memory, causing severe Cache Misses.
 * **The Solution:** We **transposed (packed)** the $B$ tiles into local SRAM-like buffers to ensure $B[k][j]$ elements are contiguous in memory during the dot product.
 
-#### 2. The Outer Product & Broadcasting Approach (Phase 3)
+#### 2. The Outer Product & Broadcasting Approach
 To leverage SIMD (AVX2), we flipped the logic to update multiple elements of $C$ at once:
 * **The Operation:** One scalar $A[i][k]$ is **broadcasted** (duplicated) into a 256-bit SIMD register.
 * **Vectorized Execution:** We load **8 contiguous elements** of $B$ (from the same row $k$) into another register.
@@ -79,7 +79,26 @@ To leverage SIMD (AVX2), we flipped the logic to update multiple elements of $C$
 
 ---
 
+## 📂 Project Structure
+```text
+.
+├── apps/               # Benchmark drivers (GEMM_Main, GEMV_Main)
+├── include/
+│   ├── core/           # ParallelExecutor (The 2D Grid Engine)
+│   ├── gemm/           # Strategy interfaces & SIMD Kernels
+│   └── gemv/           # WeightLoading & Streaming logic
+├── src/                # Implementations
+└── CMakeLists.txt      # Optimized build configuration (-O3, -mavx2)
+```
+
+---
+
 ## 🚀 Getting Started
+
+### Prerequisites
+* **CPU:** x86_64 with AVX2 and FMA support.
+* **Compiler:** GCC 10+ or Clang 11+ (supporting C++20).
+* **Build System:** CMake 3.10+.
 
 ### Compilation
 ```bash
@@ -88,17 +107,19 @@ cmake ..
 make
 ```
 
-## Running Benchmarks
-* GEMV: `./gemv_app`
+## Running Benchmarks (Execution)
+```bash
+# Run GEMM Performance Benchmark
+./build/gemm_bench
 
-* GEMM: `./gemm_bench`
+# Run GEMV Application
+./build/gemv_app
+```
 
-
-### 📂 Roadmap
-[x] Phase 1: Optimized GEMV with Double Buffering.
-
-[x] Phase 2a: Tiled GEMM with On-the-fly Packing (Tail handling included).
-
-[ ] Phase 2b: SIMD Kernel Sharpening (AVX2/FMA & Broadcasting).
-
-[ ] Phase 2c: Multi-threaded GEMM Grid Execution.
+### Cleaning
+```bash
+# Standard clean
+cmake --build build --target clean
+# Or simply
+rm -rf build/
+```
