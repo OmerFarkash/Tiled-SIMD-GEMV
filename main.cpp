@@ -21,8 +21,8 @@ bool verify_results(const std::vector<float>& ref, const std::vector<float>& tar
 }
 
 int main() {
-    const int ROWS = 8192;
-    const int COLS = 8192;
+    const int ROWS = 10013;
+    const int COLS = 12452;
     const int NUM_CORES = std::thread::hardware_concurrency();
 
     std::cout << "--- Matrix-Vector Multiplication Benchmark ---" << std::endl;

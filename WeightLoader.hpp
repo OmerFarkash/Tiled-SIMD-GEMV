@@ -16,16 +16,13 @@ class WeightLoader {
         WeightLoader();
         
         // Function to start an asynchronous DMA load from DDR to SRAM
-        void start_dma_load(float* ddr_weights_ptr, int target_buffer, int full_width, int row_offset, int col_offset);
-
+        void start_dma_load(float* ddr_weights_ptr, int target_buffer, int full_width, int row_offset, int col_offset, int valid_h, int valid_w);
         // Function to wait (stall) until the DMA load to SRAM is complete
         void wait_for_dma(int target_buffer);
-
         // Function to trigger the compute unit for the specified block
-        void compute_on_block(int buffer_index, float* inputs, float* output, int row_offset, int col_offset);
+        void compute_on_block(int buffer_index, float* inputs, float* output, int row_offset, int col_offset, int valid_h, int valid_w);
         // naive version for comperison
-        void compute_on_block_naive(int buffer_index, float* inputs, float* output, int row_offset, int col_offset);
-
+        void compute_on_block_naive(int buffer_index, float* inputs, float* output, int row_offset, int col_offset, int valid_h, int valid_w);
     private:
         alignas(32) float sram_storage[BUFFER_LEN][FLAT_TILE]; 
         std::atomic_uint8_t sram_buffer_state[BUFFER_LEN];

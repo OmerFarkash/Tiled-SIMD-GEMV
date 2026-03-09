@@ -10,7 +10,8 @@ WeightLoader::WeightLoader() {
 }
 
 // Function to start an asynchronous DMA load from DDR to SRAM
-void WeightLoader::start_dma_load(float* ddr_weights_ptr, int target_buffer, int full_width, int row_offset, int col_offset) {
+void WeightLoader::start_dma_load(float* ddr_weights_ptr, int target_buffer, int full_width,
+                                int row_offset, int col_offset, int valid_h, int valid_w) {
     uint8_t expected = FREE;
     while (!sram_buffer_state[target_buffer].compare_exchange_weak(expected, LOADING)) {
         expected = FREE;
@@ -19,9 +20,8 @@ void WeightLoader::start_dma_load(float* ddr_weights_ptr, int target_buffer, int
     // load - DMA simulation
     int sram_step = 0;
     int ddr_offset = row_offset * full_width + col_offset;
-    const int copy_size = TILE_W * sizeof(float);
-    for (int i = 0; i < TILE_H; i++)
-    {
+    const int copy_size = valid_w * sizeof(float);
+    for (int i = 0; i < valid_h; i++) {
         std::memcpy(&sram_storage[target_buffer][sram_step], &ddr_weights_ptr[ddr_offset], copy_size);
         sram_step += TILE_W;
         ddr_offset += full_width;
@@ -40,7 +40,8 @@ void WeightLoader::wait_for_dma(int target_buffer) {
 }
 
 // Function to trigger the compute unit for the specified block
-void WeightLoader::compute_on_block(int buffer_index, float* inputs, float* output, int row_offset, int col_offset) {
+void WeightLoader::compute_on_block(int buffer_index, float* inputs, float* output, 
+                                    int row_offset, int col_offset, int valid_h, int valid_w) {
     uint8_t expected = READY;
     while (!sram_buffer_state[buffer_index].compare_exchange_weak(expected, COMPUTE, std::memory_order_acquire)) {
         expected = READY;
@@ -50,11 +51,15 @@ void WeightLoader::compute_on_block(int buffer_index, float* inputs, float* outp
     float* curr_output = output + row_offset;
     float* curr_input = inputs + col_offset;
 
+    // Fast bitwise way to find the largest multiple of 8
+    int simd_limit = valid_w & ~7;
+
     // --- SIMD Kernel ---
-    for (int i = 0; i < TILE_H; i++)
+    for (int i = 0; i < valid_h; i++)
     {
         __m256 acc = _mm256_setzero_ps();
-        for (int j = 0; j < TILE_W; j += 8) {
+        int j = 0;
+        for (; j < simd_limit; j += 8) {
             __m256 weights   = _mm256_loadu_ps(&sram_storage[buffer_index][i * TILE_W + j]);
             __m256 inputs_v  = _mm256_loadu_ps(&curr_input[j]);
             acc = _mm256_fmadd_ps(weights, inputs_v, acc);
@@ -65,13 +70,19 @@ void WeightLoader::compute_on_block(int buffer_index, float* inputs, float* outp
         float row_sum = 0;
         for(int k = 0; k < 8; ++k) row_sum += res[k];
         
+        // Scalar Epilogue for the tail
+        for (; j < valid_w; ++j) {
+            row_sum += sram_storage[buffer_index][i * TILE_W + j] * curr_input[j];
+        }
+
         curr_output[i] += row_sum;
     }
 
     sram_buffer_state[buffer_index].store(FREE, std::memory_order_release);
 }
 
-void WeightLoader::compute_on_block_naive(int buffer_index, float* inputs, float* output, int row_offset, int col_offset) {
+void WeightLoader::compute_on_block_naive(int buffer_index, float* inputs, float* output,
+                                        int row_offset, int col_offset, int valid_h, int valid_w) {
     uint8_t expected = READY;
     while (!sram_buffer_state[buffer_index].compare_exchange_weak(expected, COMPUTE, std::memory_order_acquire)) {
         expected = READY;
@@ -80,10 +91,11 @@ void WeightLoader::compute_on_block_naive(int buffer_index, float* inputs, float
     float* curr_output = output + row_offset;
     float* curr_input = inputs + col_offset;
 
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < valid_h; i++) {
         float row_sum = 0;
-        for (int j = 0; j < 256; j++) {
-            row_sum += sram_storage[buffer_index][i * 256 + j] * curr_input[j];
+        int j = 0;
+        for (; j < valid_w; j++) {
+            row_sum += sram_storage[buffer_index][i * TILE_W + j] * curr_input[j];
         }
         curr_output[i] += row_sum;
     }
