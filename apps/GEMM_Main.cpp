@@ -18,23 +18,29 @@ bool verify(const Matrix& C1, const Matrix& C2) {
 }
 
 int main() {
-    const int N = 1025; 
+    // Deep Learning Asymmetric Profile with unaligned tails
+    const int M = 250;   // e.g., Batch size
+    const int K = 1000;  // e.g., Input features
+    const int N = 4000;  // e.g., Output features
+
     std::cout << "\n======================================================\n";
-    std::cout << "      Phase 2: GEMM Cache-Locality Benchmark          \n";
-    std::cout << "               Matrix Size: " << N << "x" << N << "                \n";
+    std::cout << "      Phase 2: GEMM Robustness & Cache Benchmark      \n";
+    std::cout << "      Profile: Deep Learning FC Layer (Unaligned)     \n";
+    std::cout << "      Dimensions: M=" << M << ", K=" << K << ", N=" << N << "   \n";
     std::cout << "======================================================\n\n";
 
-    Matrix A(N, N), B(N, N), C_naive(N, N), C_trans(N, N), C_packed(N, N);
+    // Setup matrices with correct dimensions
+    Matrix A(M, K), B(K, N), C_naive(M, N), C_trans(M, N), C_packed(M, N);
 
-    // Initialize with random data using a fixed seed
     const uint32_t seed = 42;
     std::mt19937 gen(seed);
     std::uniform_real_distribution<float> dist(0.0f, 1.0f);
 
-    for (int i = 0; i < N * N; ++i) {
-        A.data[i] = dist(gen);
-        B.data[i] = dist(gen);
-    }
+    // Initialize A (M x K)
+    for (int i = 0; i < M * K; ++i) A.data[i] = dist(gen);
+    
+    // Initialize B (K x N)
+    for (int i = 0; i < K * N; ++i) B.data[i] = dist(gen);
 
     std::cout << "--- Part 1: Algorithmic Comparison ---\n";
     std::cout << std::left << std::setw(25) << "Algorithm" 
