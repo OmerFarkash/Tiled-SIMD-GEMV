@@ -1,6 +1,6 @@
 # Tiled SIMD Matrix Engine
 
-A high-performance C++ Matrix Multiplication (GEMM) and Vector (GEMV) engine optimized for modern CPU architectures. This project demonstrates significant speedups through **AVX2 SIMD Intrinsics**, **Cache-aware Tiling**, and **Multi-threaded 2D Grid Partitioning**.
+A high-performance C++ Matrix Multiplication (GEMM) and Vector (GEMV) engine optimized for modern CPU architectures. This project demonstrates significant speedups through **AVX2 SIMD Intrinsics**, **Cache-aware Tiling**, **Register-level Micro-Kernels**, and **Multi-threaded 2D Grid Partitioning**.
 
 
 ## 🔹 Matrix-Vector Multiplication (GEMV)
@@ -25,22 +25,22 @@ Focuses on real-time streaming of weights using asynchronous double-buffering.
 
 ## 🔸 Matrix-Matrix Multiplication (GEMM)
 
-The current evolution stage. Unlike GEMV, GEMM is heavily compute-bound and requires aggressive cache reuse and vectorization.
+Unlike GEMV, GEMM is heavily compute-bound and requires aggressive cache reuse and vectorization. The project evolves through 4 distinct optimization phases.
 
 ### GEMM Performance:
 *Benchmark conducted on a Deep Learning FC Layer Profile (M=250, K=1000, N=4000).*
 
-| Optimization Level | Strategy | Threads | Time (ms) | Speedup |
-| :--- | :--- | :--- | :--- | :--- |
-| **Baseline** | Naive Triple Loop | 1 | 2508.76 | 1.00x |
-| **Memory Opt** | Tiled + Packed Transpose | 1 | 849.80 | 2.95x |
-| **Vectorized** | SIMD + Broadcasting | 1 | 261.29 | 9.60x |
-| **Parallel (Optimal)** | **2D Grid SIMD Engine** | **4** | **119.49** | **21.00x** |
-| **Parallel (Saturated)** | 2D Grid SIMD Engine | 8 | 130.37 | 19.24x |
+| Phase | Optimization Level | Strategy | Threads | Time (ms) | Speedup |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **1** | **Baseline** | Naive Triple Loop | 1 | ~2434 | 1.00x |
+| **1** | **Memory Opt** | Naive Transpose | 1 | ~1391 | 1.74x |
+| **2** | **Cache Opt** | Tiled + Packed Transpose | 1 | ~894 | 2.72x |
+| **3** | **Vectorized** | SIMD + Broadcasting | 1 | ~245 | 9.93x |
+| **3** | **Parallel** | 2D Grid SIMD Engine | 4 | ~138 | 17.53x |
+| **4** | **Register Tile** | MR×NR Micro-Kernel (4×16) | 1 | **~105** | **22.97x** |
+| **4** | **Register Tile + Parallel (Optimal)** | **MR×NR + 2D Grid** | **4** | **~57** | **~42.47x** |
 
-*more benchmarks at execution*
-
-*Note: The performance plateau between 4 and 8 threads perfectly illustrates hardware saturation on a 4-core physical CPU. Hyper-threading (logical cores) provides no additional ALUs for heavy AVX2 instructions, leading to a slight regression due to context-switching and memory bandwidth contention.*
+*Note: The single-thread Phase 4 register-tile kernel fully surpasses the 4-thread Phase 3 SIMD baseline.*
 
 ---
 
@@ -60,6 +60,40 @@ The `ParallelExecutor` core utilizes a 2D Grid topology to distribute work, reve
 
 ### 3. Cache-Aware Tiling
 Micro-tiling (fixed at $32 \times 32$) ensures that the active data set for any given computation fits entirely within the **L1 Data Cache**, preventing costly stalls and cache evictions during the inner-most computation loops.
+
+### 4. Register-Level Micro-Tile (MR × NR) — Phase 4
+The innermost tiling level targets the **CPU register file** itself. AVX2 provides **16 × 256-bit YMM registers**. The Phase 3 kernel used only 1 of these as an accumulator at a time; Phase 4 occupies up to 8 (`MR=4, NR=16` → `4 × 2 = 8 accumulators`).
+
+> **Note:** "Cores saturated" (README Part 3) and "registers underutilised" are two different dimensions. At 4 threads the ALU throughput is core-saturated; but *within each core*, only 1 of 16 YMM registers held an accumulator. Phase 4 fills 8 accumulators per core, issuing more independent FMAs per cycle (higher IPC) without needing more threads.
+
+**Three-level tiling hierarchy:**
+```
+Thread macro-tile  (2D grid via ParallelExecutor)
+  Cache tile       (tile_size × tile_size, fits L1/L2)
+    Register tile  (MR × NR — lives in YMM register file)  ← Phase 4
+```
+
+**Why it works:**
+* **MR rows** of C are computed simultaneously — each A broadcast value is **reused NR/8 times** instead of once.
+* **NR cols** of C per row: accumulators stay **in registers across the full k-loop**, eliminating redundant loads/stores to C.
+* The micro-kernel is a **compile-time template** (`template<int MR, int NR>`), so the compiler fully unrolls and assigns named YMM registers.
+
+**AVX2 Register Budget (optimal config):**
+
+| Usage | Count |
+| :--- | :--- |
+| MR×(NR/8) accumulators | 8 |
+| A broadcast operand | 1 |
+| B load operand | 1 |
+| **Total** | **10 / 16 YMM** |
+
+### 5. Benchmark Variance & Environment Noise
+
+You may notice that running the benchmark multiple times yields slightly different results, particularly regarding the optimal multi-thread configuration (e.g., 4 threads vs. 8 threads) and exact cache tile sweet-spots. This variance is entirely normal and stems from several hardware and OS-level factors:
+* **OS Task Scheduling & Thread Migration:** Because we are not pinning threads to specific CPU cores (Thread Affinity), the OS scheduler may dynamically migrate threads across different physical/logical cores during execution. This can cause sudden L1/L2 cache invalidations.
+* **Hyper-Threading (SMT) Collisions:** On a 4-core / 8-thread machine, scaling from 4 to 8 threads means logical cores begin sharing the physical ALU and L1 caches. Sometimes SMT successfully hides memory latency (resulting in a slight speedup at 8 threads); other times, they fight for the same saturated AVX2 units and cache lines, resulting in a regression. The optimal count often dances right on this hardware ceiling.
+* **Thermal Throttling & Turbo Boost:** Modern processors dynamically adjust their clock frequencies based on thermal headroom. A cold run might boost significantly higher than a subsequent run where the CPU scales back clock speeds to maintain temperatures.
+* **Background Noise:** Any other processes running on the machine (browser, background services) will steal CPU cycles and pollute the shared L3 cache, causing momentary micro-stutters in execution time.
 
 ---
 
@@ -88,7 +122,7 @@ To leverage SIMD (AVX2), we flipped the logic to update multiple elements of $C$
 ├── apps/               # Benchmark drivers (GEMM_Main, GEMV_Main)
 ├── include/
 │   ├── core/           # ParallelExecutor (The 2D Grid Engine)
-│   ├── gemm/           # Strategy interfaces & SIMD Kernels
+│   ├── gemm/           # Strategy interfaces, SIMD Kernels & Micro-Kernel
 │   └── gemv/           # WeightLoading & Streaming logic
 ├── src/                # Implementations
 └── CMakeLists.txt      # Optimized build configuration (-O3, -mavx2)
@@ -112,7 +146,7 @@ make
 
 ## Running Benchmarks (Execution)
 ```bash
-# Run GEMM Performance Benchmark
+# Run GEMM Performance Benchmark (all 5 parts)
 ./build/gemm_bench
 
 # Run GEMV Application

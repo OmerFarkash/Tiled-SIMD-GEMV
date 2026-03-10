@@ -3,7 +3,7 @@
 #include <iomanip>
 #include <cmath>
 #include <algorithm>
-#include <bits/std_thread.h>
+#include <thread>
 #include "../include/gemv/WeightLoader.hpp"
 #include "../include/gemv/Strategies.hpp"
 #include "../include/core/ParallelExecutor.hpp"

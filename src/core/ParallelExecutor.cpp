@@ -6,7 +6,7 @@
 double ParallelExecutor::run(ComputeStrategy& strategy, int num_threads, int total_rows, 
                             float* matrix, float* inputs, float* output, int full_width) {
     
-    auto start = std::chrono::high_resolution_clock::now();
+    auto start = std::chrono::steady_clock::now();
     std::vector<std::thread> threads;
     std::vector<WeightLoader> loaders(num_threads); 
     
@@ -25,7 +25,7 @@ double ParallelExecutor::run(ComputeStrategy& strategy, int num_threads, int tot
         if (t.joinable()) t.join();
     }
 
-    auto end = std::chrono::high_resolution_clock::now();
+    auto end = std::chrono::steady_clock::now();
     std::chrono::duration<double, std::milli> elapsed = end - start;
     return elapsed.count();
 }
@@ -53,7 +53,7 @@ namespace {
 double ParallelExecutor::run(GEMM_Strategy& strategy, int num_threads, 
                              const Matrix& A, const Matrix& B, Matrix& C) {
     
-    auto start = std::chrono::high_resolution_clock::now();
+    auto start = std::chrono::steady_clock::now();
     
     std::vector<std::thread> threads;
     threads.reserve(num_threads);
@@ -90,7 +90,7 @@ double ParallelExecutor::run(GEMM_Strategy& strategy, int num_threads,
         }
     }
 
-    auto end = std::chrono::high_resolution_clock::now();
+    auto end = std::chrono::steady_clock::now();
     std::chrono::duration<double, std::milli> elapsed = end - start;
     
     return elapsed.count();

@@ -34,6 +34,7 @@ set(GEMM_SOURCES
     apps/GEMM_Main.cpp
     src/gemm/GEMM_Kernels.cpp
     src/gemm/SimdGemmStrategy.cpp
+    src/gemm/RegisterTileGemmStrategy.cpp
     ${CORE_SOURCES}
 )
 
